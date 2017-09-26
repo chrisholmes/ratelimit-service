@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestRatelimitService(t *testing.T) {
+func TestWhitelistService(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "RatelimitService Suite")
+	RunSpecs(t, "WhitelistService Suite")
 }

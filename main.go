@@ -3,14 +3,13 @@ package main
 import (
 	"bytes"
 	"crypto/tls"
-	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -22,19 +21,19 @@ const (
 )
 
 var (
-	limit       int
-	rateLimiter *RateLimiter
+	whiteList *WhiteList
 )
 
 func main() {
 	log.SetOutput(os.Stdout)
 
-	limit = getEnv("RATE_LIMIT", DEFAULT_LIMIT)
-	log.Printf("limit per sec [%d]\n", limit)
+	list := os.Getenv("WHITE_LIST")
+  rawWhiteList := strings.Split(list, ",")
+	sort.Strings(rawWhiteList)
+  whiteList = NewWhiteList(rawWhiteList)
 
-	rateLimiter = NewRateLimiter(limit)
+	log.Printf("whiteList is [%s]\n", strings.Join(whiteList.whiteList, ", "))
 
-	http.HandleFunc("/stats", statsHandler)
 	http.Handle("/", newProxy())
 	log.Fatal(http.ListenAndServe(":"+getPort(), nil))
 }
@@ -52,18 +51,9 @@ func newProxy() http.Handler {
 			req.URL = url
 			req.Host = url.Host
 		},
-		Transport: newRateLimitedRoundTripper(),
+		Transport: newWhiteListedRoundTripper(),
 	}
 	return proxy
-}
-
-func statsHandler(w http.ResponseWriter, r *http.Request) {
-	stats, err := json.Marshal(rateLimiter.GetStats())
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	fmt.Fprintf(w, string(stats))
 }
 
 func getPort() string {
@@ -98,32 +88,32 @@ func getEnv(env string, defaultValue int) int {
 	return config
 }
 
-type RateLimitedRoundTripper struct {
-	rateLimiter *RateLimiter
-	transport   http.RoundTripper
+type WhiteListedRoundTripper struct {
+	whiteList *WhiteList
+	transport http.RoundTripper
 }
 
-func newRateLimitedRoundTripper() *RateLimitedRoundTripper {
+func newWhiteListedRoundTripper() *WhiteListedRoundTripper {
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: skipSslValidation()},
 	}
-	return &RateLimitedRoundTripper{
-		rateLimiter: rateLimiter,
-		transport:   tr,
+	return &WhiteListedRoundTripper{
+		whiteList: whiteList,
+		transport: tr,
 	}
 }
 
-func (r *RateLimitedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+func (r *WhiteListedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	var err error
 	var res *http.Response
 
 	remoteIP := strings.Split(req.RemoteAddr, ":")[0]
 
 	log.Printf("request from [%s]\n", remoteIP)
-	if r.rateLimiter.ExceedsLimit(remoteIP) {
+	if !r.whiteList.contains(remoteIP) {
 		resp := &http.Response{
-			StatusCode: 429,
-			Body:       ioutil.NopCloser(bytes.NewBufferString("Too many requests")),
+			StatusCode: 401,
+			Body:       ioutil.NopCloser(bytes.NewBufferString("Doesn't match whitelist")),
 		}
 		return resp, nil
 	}
